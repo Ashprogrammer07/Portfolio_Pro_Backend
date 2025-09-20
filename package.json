@@ -4,9 +4,9 @@
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1",
-    "dev": "nodemon server.js",
-    "start": "node server.js",
-    "build": "cd ./frontend && npm run build "
+    "dev": "node api.js && nodemon server.js",
+    "start": "node api.js && node server.js",
+    "build": "node api.js && cd ./frontend && npm run build "
   },
   "keywords": [],
   "author": "",
