@@ -16,11 +16,11 @@ const adminRoute = require("./routes/adminroute");
 // Load environment variables
 dotenv.config({ path: "./config/config.env" });
 
-// ✅ Configure Cloudinary (ONLY cloud_name needed for unsigned uploads)
+// ✅ Configure Cloudinary (only cloud_name needed for unsigned uploads)
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
+  api_key: process.env.CLOUDINARY_API_KEY,    // Optional for unsigned uploads
+  api_secret: process.env.CLOUDINARY_API_SECRET, // Optional for unsigned uploads
   secure: true
 });
 
@@ -37,15 +37,12 @@ connectDB();
 const app = express();
 
 // Middleware
-app.use(cors({
-  origin: ["http://localhost:3000", "https://new-portfolio-frontend-jp0y.onrender.com"], // Add your Render URL
-  credentials: true
-}));
+app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // ✅ Configure multer for memory storage (perfect for Render)
-const storage = multer.memoryStorage(); // Files stored in memory, not disk
+const storage = multer.memoryStorage();
 
 const upload = multer({ 
   storage: storage,
@@ -68,35 +65,36 @@ const upload = multer({
   }
 });
 
-// ✅ Cloudinary upload function using buffer (perfect for Render)
+// ✅ CORRECTED: Use unsigned_upload method (no signature needed)
 const uploadToCloudinary = async (buffer, originalname) => {
   return new Promise((resolve, reject) => {
-    console.log("🚀 Starting Cloudinary upload from buffer...");
+    console.log("🚀 Starting UNSIGNED Cloudinary upload...");
     
-    // Generate clean public ID
+    // Generate clean public ID (optional for unsigned uploads)
     const baseFilename = path.basename(originalname, path.extname(originalname));
     const cleanBasename = baseFilename.replace(/[^a-zA-Z0-9]/g, '_');
     const timestamp = Date.now();
     const randomString = Math.random().toString(36).substring(2, 6);
     const publicId = `${cleanBasename}_${timestamp}_${randomString}`;
     
-    const uploadStream = cloudinary.uploader.upload_stream(
+    // ✅ Use unsigned_upload method instead of upload
+    cloudinary.uploader.unsigned_upload_stream(
+      "portfolio_upload", // Your unsigned upload preset name
       {
-        // ✅ Use your unsigned upload preset name
-        upload_preset: "portfolio_upload", // Replace with your preset name
-        public_id: publicId,
-        resource_type: "image",
-        // Don't specify folder here if it's in the preset
+        // ✅ Minimal options for unsigned upload
+        public_id: publicId, // Optional
+        resource_type: "auto",
+        // Don't specify folder here if it's set in the upload preset
       },
       (error, result) => {
         if (error) {
-          console.error("❌ Cloudinary upload error:", error);
+          console.error("❌ Cloudinary unsigned upload error:", error);
           resolve({
             success: false,
             error: error.message
           });
         } else {
-          console.log("✅ Upload successful:", result.public_id);
+          console.log("✅ Unsigned upload successful:", result.public_id);
           resolve({
             success: true,
             publicId: result.public_id,
@@ -118,17 +116,14 @@ const uploadToCloudinary = async (buffer, originalname) => {
           });
         }
       }
-    );
-
-    // Send the buffer to Cloudinary
-    uploadStream.end(buffer);
+    ).end(buffer); // Send buffer to stream
   });
 };
 
-// ✅ WORKING CLOUDINARY UPLOAD ROUTE FOR RENDER
+// ✅ CORRECTED UPLOAD ROUTE - Using unsigned upload
 app.post('/api/projects/upload-image', upload.single('image'), async (req, res) => {
   try {
-    console.log("📤 Upload request received on Render");
+    console.log("📤 Unsigned upload request received");
     
     if (!req.file) {
       console.log("❌ No file received");
@@ -160,15 +155,15 @@ app.post('/api/projects/upload-image', upload.single('image'), async (req, res) 
       });
     }
 
-    // Upload to Cloudinary using buffer
+    // ✅ Upload using unsigned method
     const uploadResult = await uploadToCloudinary(req.file.buffer, req.file.originalname);
 
     if (uploadResult.success) {
-      console.log(`✅ Upload successful: ${uploadResult.publicId}`);
+      console.log(`✅ Unsigned upload successful: ${uploadResult.publicId}`);
       
       res.status(200).json({
         success: true,
-        message: 'Image uploaded successfully to Cloudinary',
+        message: 'Image uploaded successfully via unsigned upload',
         data: {
           publicId: uploadResult.publicId,
           url: uploadResult.url,
@@ -181,11 +176,11 @@ app.post('/api/projects/upload-image', upload.single('image'), async (req, res) 
         }
       });
     } else {
-      console.error(`❌ Upload failed: ${uploadResult.error}`);
+      console.error(`❌ Unsigned upload failed: ${uploadResult.error}`);
       
       res.status(500).json({
         success: false,
-        message: 'Failed to upload image to Cloudinary',
+        message: 'Failed to upload image via unsigned upload',
         error: uploadResult.error
       });
     }
@@ -195,82 +190,96 @@ app.post('/api/projects/upload-image', upload.single('image'), async (req, res) 
 
     res.status(500).json({
       success: false,
-      message: 'Internal server error during upload',
+      message: 'Internal server error during unsigned upload',
       error: error.message
     });
   }
 });
 
-// ✅ Alternative: Direct frontend upload endpoint (returns signature for frontend)
-app.post('/api/projects/get-signature', (req, res) => {
+// ✅ Alternative: Direct buffer upload without stream
+app.post('/api/projects/upload-image-direct', upload.single('image'), async (req, res) => {
   try {
-    const timestamp = Math.round(Date.now() / 1000);
+    console.log("📤 Direct unsigned upload request");
     
-    // For unsigned uploads, you don't need signature
-    // Just return the upload configuration
-    res.json({
-      success: true,
-      data: {
-        cloudName: process.env.CLOUDINARY_CLOUD_NAME,
-        uploadPreset: "portfolio_upload", // Your unsigned preset name
-        timestamp: timestamp,
-        // No signature needed for unsigned uploads
-      }
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: 'Failed to generate upload configuration',
-      error: error.message
-    });
-  }
-});
-
-// ✅ Delete image from Cloudinary
-app.delete('/api/projects/delete-image/:publicId', async (req, res) => {
-  try {
-    const { publicId } = req.params;
-    
-    const result = await cloudinary.uploader.destroy(publicId);
-    
-    if (result.result === 'ok') {
-      res.json({
-        success: true,
-        message: 'Image deleted successfully'
-      });
-    } else {
-      res.status(404).json({
+    if (!req.file) {
+      return res.status(400).json({
         success: false,
-        message: 'Image not found or already deleted'
+        message: 'No image file uploaded'
       });
     }
+
+    // ✅ Use unsigned_upload with buffer directly
+    const result = await cloudinary.uploader.unsigned_upload(
+      `data:${req.file.mimetype};base64,${req.file.buffer.toString('base64')}`,
+      "portfolio_upload", // Your unsigned upload preset
+      {
+        resource_type: "auto"
+        // Don't add public_id or other signed-upload parameters
+      }
+    );
+
+    console.log("✅ Direct unsigned upload successful:", result.public_id);
+
+    res.status(200).json({
+      success: true,
+      message: 'Direct unsigned upload successful',
+      data: {
+        publicId: result.public_id,
+        url: result.secure_url,
+        width: result.width,
+        height: result.height,
+        format: result.format,
+        size: result.bytes,
+        filename: req.file.originalname
+      }
+    });
+
   } catch (error) {
+    console.error('❌ Direct upload error:', error);
     res.status(500).json({
       success: false,
-      message: 'Failed to delete image',
+      message: 'Direct unsigned upload failed',
       error: error.message
     });
   }
 });
 
-// ✅ Health check endpoint
-app.get('/api/cloudinary/health', async (req, res) => {
+// ✅ Test endpoint to verify your upload preset works
+app.get('/api/test-unsigned-upload', async (req, res) => {
   try {
-    // Test if Cloudinary config is working
-    const config = cloudinary.config();
+    console.log("🧪 Testing unsigned upload with tiny image...");
+    
+    // Test with a tiny 1x1 pixel image
+    const tinyImageBase64 = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    
+    const result = await cloudinary.uploader.unsigned_upload(
+      tinyImageBase64,
+      "portfolio_upload" // Your unsigned upload preset
+    );
+    
+    // Clean up test image
+    await cloudinary.uploader.destroy(result.public_id);
     
     res.json({
       success: true,
-      message: "Cloudinary configured for Render deployment",
-      cloudName: config.cloud_name,
-      hasApiKey: !!config.api_key,
-      timestamp: new Date().toISOString()
+      message: "✅ Unsigned upload preset is working!",
+      testPublicId: result.public_id,
+      uploadPreset: "portfolio_upload"
     });
+    
   } catch (error) {
+    console.error("❌ Test upload failed:", error);
     res.status(500).json({
       success: false,
-      message: "Cloudinary health check failed",
-      error: error.message
+      message: "❌ Unsigned upload test failed",
+      error: error.message,
+      instructions: [
+        "1. Go to https://console.cloudinary.com/",
+        "2. Navigate to Settings > Upload > Upload presets",
+        "3. Create a new preset named 'portfolio_upload'",
+        "4. Set 'Signing mode' to 'Unsigned'",
+        "5. Save the preset and try again"
+      ]
     });
   }
 });
@@ -285,8 +294,7 @@ app.use("/api", adminRoute);
 app.get("/api/health", (req, res) => {
   res.status(200).json({
     success: true,
-    message: "Server is running on Render",
-    environment: process.env.NODE_ENV || 'development',
+    message: "Server running with unsigned Cloudinary uploads",
     timestamp: new Date().toISOString()
   });
 });
@@ -306,7 +314,7 @@ app.use((err, req, res, next) => {
   
   res.status(500).json({ 
     success: false, 
-    message: "Server error on Render",
+    message: "Server error",
     error: process.env.NODE_ENV === 'development' ? err.message : 'Internal server error'
   });
 });
@@ -314,7 +322,8 @@ app.use((err, req, res, next) => {
 const PORT = process.env.PORT || 8000;
 
 app.listen(PORT, () => {
-  console.log(`🚀 Server is running on Render port ${PORT}`);
-  console.log(`☁️ Cloudinary health: /api/cloudinary/health`);
+  console.log(`🚀 Server running on port ${PORT} with unsigned uploads`);
+  console.log(`🧪 Test unsigned upload: GET /api/test-unsigned-upload`);
   console.log(`🖼️ Upload endpoint: POST /api/projects/upload-image`);
+  console.log(`⚡ Direct upload: POST /api/projects/upload-image-direct`);
 });
