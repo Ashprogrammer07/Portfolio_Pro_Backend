@@ -14,15 +14,21 @@ const projectroute = require("./routes/projectroutes");
 const skillroute = require("./routes/skillsRoutes");
 const adminRoute = require("./routes/adminroute");
 
-// Load environment variables first
+// ✅ Load environment variables FIRST
 dotenv.config({ path: "./config/config.env" });
 
-// Configure Cloudinary (remove any extra spaces or special characters)
+// ✅ Debug environment variables (remove in production)
+console.log("🔍 Environment Variables Check:");
+console.log("CLOUDINARY_CLOUD_NAME:", process.env.CLOUDINARY_CLOUD_NAME ? "✅ Set" : "❌ Missing");
+console.log("CLOUDINARY_API_KEY:", process.env.CLOUDINARY_API_KEY ? "✅ Set" : "❌ Missing");
+console.log("CLOUDINARY_API_SECRET:", process.env.CLOUDINARY_API_SECRET ? "✅ Set" : "❌ Missing");
+
+// ✅ Configure Cloudinary with string values (not variables)
 cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-  secure: true,
+  cloud_name: String(process.env.CLOUDINARY_CLOUD_NAME).trim(),
+  api_key: String(process.env.CLOUDINARY_API_KEY).trim(),
+  api_secret: String(process.env.CLOUDINARY_API_SECRET).trim(),
+  secure: true
 });
 
 // Import existing utility functions
@@ -46,81 +52,60 @@ const storage = multer.diskStorage({
   }
 });
 
-// Enhanced file filter
-const fileFilter = (req, file, cb) => {
-  if (isValidImageType(file.mimetype)) {
-    cb(null, true);
-  } else {
-    cb(new Error('Invalid file type. Only JPEG, PNG, WEBP, and GIF files are allowed'), false);
-  }
-};
-
-// Configure multer
 const upload = multer({ 
   storage: storage,
   limits: { 
     fileSize: 10 * 1024 * 1024, // 10MB
   },
-  fileFilter: fileFilter
+  fileFilter: (req, file, cb) => {
+    if (isValidImageType(file.mimetype)) {
+      cb(null, true);
+    } else {
+      cb(new Error('Invalid file type'), false);
+    }
+  }
 });
 
-// ✅ CORRECTED Cloudinary upload function with proper transformation syntax
-const uploadToCloudinary = async (filePath, options = {}) => {
+// ✅ SIMPLIFIED Cloudinary upload function - minimal parameters to avoid signature issues
+const uploadToCloudinary = async (filePath) => {
   try {
-    // ✅ Fixed transformation format - removed nested arrays and conflicting parameters
-    const uploadOptions = {
-      folder: options.folder || "portfolio/projects",
-      resource_type: "image",
-      // ✅ Removed conflicting format/quality parameters that were causing signature issues
-      transformation: [
-        { width: 1200, height: 800, crop: "limit" }
-        // ✅ Removed f_auto and q_auto from here - they'll be applied at delivery time
-      ]
-    };
-
-    // ✅ Only add public_id if provided
-    if (options.public_id) {
-      uploadOptions.public_id = options.public_id;
-    }
-
-    console.log("🔧 Upload options:", JSON.stringify(uploadOptions, null, 2));
-
-    const result = await cloudinary.uploader.upload(filePath, uploadOptions);
+    console.log("🚀 Starting Cloudinary upload...");
+    console.log("📁 File path:", filePath);
     
-    // Clean up temporary file
+    // ✅ Use MINIMAL upload options to avoid signature generation issues
+    const result = await cloudinary.uploader.upload(filePath, {
+      // Only essential parameters - no custom transformations
+      resource_type: "auto",
+      folder: "portfolio" // Simplified folder name
+    });
+    
+    console.log("✅ Upload successful:", result.public_id);
+    
+    // Clean up temp file
     try {
       fs.unlinkSync(filePath);
-    } catch (unlinkError) {
-      console.warn('Could not delete temp file:', unlinkError.message);
+    } catch (e) {
+      console.warn('Could not delete temp file:', e.message);
     }
     
     return {
       success: true,
       publicId: result.public_id,
       url: result.secure_url,
-      thumbnailUrl: cloudinary.url(result.public_id, {
-        width: 200,
-        height: 200,
-        crop: "fill",
-        gravity: "center", // ✅ Changed from "face" to "center" for better compatibility
-        format: "auto",
-        quality: "auto",
-        secure: true
-      }),
       width: result.width,
       height: result.height,
       format: result.format,
-      size: result.bytes,
-      version: result.version
+      size: result.bytes
     };
+    
   } catch (error) {
     console.error("❌ Cloudinary upload error:", error);
     
-    // Clean up temporary file on error
+    // Clean up temp file on error
     try {
       fs.unlinkSync(filePath);
-    } catch (unlinkError) {
-      console.warn('Could not delete temp file after error:', unlinkError.message);
+    } catch (e) {
+      console.warn('Could not delete temp file after error:', e.message);
     }
     
     return {
@@ -130,31 +115,8 @@ const uploadToCloudinary = async (filePath, options = {}) => {
   }
 };
 
-// Verify Cloudinary configuration
-const verifyCloudinaryConfig = () => {
-  const { cloud_name, api_key, api_secret } = cloudinary.config();
-  
-  console.log("🔍 Checking Cloudinary config...");
-  console.log("Cloud name:", cloud_name ? "✅" : "❌");
-  console.log("API key:", api_key ? "✅" : "❌");  
-  console.log("API secret:", api_secret ? "✅" : "❌");
-  
-  if (!cloud_name || !api_key || !api_secret) {
-    console.error("⚠️ Cloudinary configuration incomplete!");
-    console.error("Please check your environment variables:");
-    console.error("- CLOUDINARY_CLOUD_NAME");
-    console.error("- CLOUDINARY_API_KEY"); 
-    console.error("- CLOUDINARY_API_SECRET");
-    return false;
-  }
-  
-  console.log("✅ Cloudinary configured successfully");
-  return true;
-};
-
 // Connect to database
 connectDB();
-verifyCloudinaryConfig();
 
 const app = express();
 
@@ -173,12 +135,45 @@ const createTempDir = () => {
 
 createTempDir();
 
-// 🎯 CORRECTED CLOUDINARY UPLOAD ROUTE
+// ✅ TEST ENDPOINT - Verify Cloudinary credentials work
+app.get('/api/cloudinary/test-credentials', async (req, res) => {
+  try {
+    console.log("🧪 Testing Cloudinary credentials...");
+    
+    // Test with a simple 1x1 pixel image
+    const testImageData = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    
+    const result = await cloudinary.uploader.upload(testImageData, {
+      public_id: "test_" + Date.now(),
+      resource_type: "image"
+    });
+    
+    // Delete the test image
+    await cloudinary.uploader.destroy(result.public_id);
+    
+    res.json({
+      success: true,
+      message: "Cloudinary credentials are working!",
+      cloudName: cloudinary.config().cloud_name,
+      testPublicId: result.public_id
+    });
+    
+  } catch (error) {
+    console.error("❌ Credential test failed:", error);
+    res.status(500).json({
+      success: false,
+      message: "Cloudinary credentials test failed",
+      error: error.message,
+      cloudName: cloudinary.config().cloud_name
+    });
+  }
+});
+
+// ✅ SIMPLIFIED UPLOAD ROUTE
 app.post('/api/projects/upload-image', upload.single('image'), async (req, res) => {
   try {
     console.log("📤 Upload request received");
     
-    // Check if file was uploaded
     if (!req.file) {
       return res.status(400).json({
         success: false,
@@ -189,8 +184,7 @@ app.post('/api/projects/upload-image', upload.single('image'), async (req, res) 
     console.log("📁 File details:", {
       filename: req.file.filename,
       size: req.file.size,
-      mimetype: req.file.mimetype,
-      path: req.file.path
+      mimetype: req.file.mimetype
     });
 
     // Validate file
@@ -198,7 +192,7 @@ app.post('/api/projects/upload-image', upload.single('image'), async (req, res) 
       fs.unlinkSync(req.file.path);
       return res.status(400).json({
         success: false,
-        message: 'Invalid file type. Only JPEG, PNG, WEBP, and GIF files are allowed'
+        message: 'Invalid file type'
       });
     }
 
@@ -210,23 +204,11 @@ app.post('/api/projects/upload-image', upload.single('image'), async (req, res) 
       });
     }
 
-    // ✅ Generate clean public ID (no file extension, no special chars)
-    const baseFilename = path.basename(req.file.originalname, path.extname(req.file.originalname));
-    const cleanBasename = baseFilename.replace(/[^a-zA-Z0-9]/g, '_');
-    const timestamp = Date.now();
-    const randomString = Math.random().toString(36).substring(2, 8);
-    const publicId = `project_${cleanBasename}_${timestamp}_${randomString}`;
-    
-    console.log("🔑 Generated public ID:", publicId);
-    
-    // Upload to Cloudinary with corrected options
-    const uploadResult = await uploadToCloudinary(req.file.path, {
-      public_id: publicId, // ✅ Use underscore format as expected by Cloudinary
-      folder: "portfolio/projects" // ✅ No trailing slash
-    });
+    // ✅ Use the simplified upload function
+    const uploadResult = await uploadToCloudinary(req.file.path);
 
     if (uploadResult.success) {
-      console.log(`✅ Image uploaded successfully: ${uploadResult.publicId}`);
+      console.log(`✅ Upload successful: ${uploadResult.publicId}`);
       
       res.status(200).json({
         success: true,
@@ -234,7 +216,6 @@ app.post('/api/projects/upload-image', upload.single('image'), async (req, res) 
         data: {
           publicId: uploadResult.publicId,
           url: uploadResult.url,
-          thumbnailUrl: uploadResult.thumbnailUrl,
           width: uploadResult.width,
           height: uploadResult.height,
           format: uploadResult.format,
@@ -255,12 +236,11 @@ app.post('/api/projects/upload-image', upload.single('image'), async (req, res) 
   } catch (error) {
     console.error('❌ Upload route error:', error);
     
-    // Clean up file if it exists
     if (req.file && req.file.path) {
       try {
         fs.unlinkSync(req.file.path);
-      } catch (unlinkError) {
-        console.warn('Could not delete temp file:', unlinkError.message);
+      } catch (e) {
+        console.warn('Could not delete temp file:', e.message);
       }
     }
 
@@ -272,64 +252,24 @@ app.post('/api/projects/upload-image', upload.single('image'), async (req, res) 
   }
 });
 
-// Test Cloudinary connection endpoint
-app.get("/api/cloudinary/test", async (req, res) => {
-  try {
-    // Simple test upload with minimal parameters
-    const testResult = await cloudinary.uploader.upload("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", {
-      folder: "test",
-      public_id: "test_image_" + Date.now()
-    });
-    
-    // Clean up test image
-    await cloudinary.uploader.destroy(testResult.public_id);
-    
-    res.json({
-      success: true,
-      message: "Cloudinary connection test successful",
-      timestamp: new Date().toISOString()
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      message: "Cloudinary connection test failed", 
-      error: error.message
-    });
-  }
-});
-
 // Other routes...
 app.use("/api/contact", contactroute);
 app.use("/api/projects", projectroute);
 app.use("/api/skills", skillroute);
 app.use("/api", adminRoute);
 
-// Serve uploads folder
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-// Health check
 app.get("/api/health", (req, res) => {
   res.status(200).json({
     success: true,
     message: "Server is running",
-    cloudinary: {
-      configured: !!cloudinary.config().cloud_name
-    },
     timestamp: new Date().toISOString()
   });
 });
 
-// Global error handler
 app.use((err, req, res, next) => {
   console.error("Global Error Handler:", err);
-  
-  if (err.code === "LIMIT_FILE_SIZE") {
-    return res.status(400).json({
-      success: false,
-      message: "File too large. Maximum size is 10MB"
-    });
-  }
-  
   res.status(500).json({ 
     success: false, 
     message: "Server error"
@@ -340,6 +280,6 @@ const PORT = process.env.PORT || 8000;
 
 app.listen(PORT, () => {
   console.log(`🚀 Server is running on port ${PORT}`);
-  console.log(`🖼️ Image upload: POST http://localhost:${PORT}/api/projects/upload-image`);
-  console.log(`🧪 Cloudinary test: GET http://localhost:${PORT}/api/cloudinary/test`);
+  console.log(`🧪 Test credentials: GET http://localhost:${PORT}/api/cloudinary/test-credentials`);
+  console.log(`🖼️ Upload image: POST http://localhost:${PORT}/api/projects/upload-image`);
 });
