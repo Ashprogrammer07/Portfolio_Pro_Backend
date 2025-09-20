@@ -14,240 +14,182 @@ const projectroute = require("./routes/projectroutes");
 const skillroute = require("./routes/skillsRoutes");
 const adminRoute = require("./routes/adminroute");
 
-// ✅ Load environment variables FIRST
+// ✅ Load environment variables
 dotenv.config({ path: "./config/config.env" });
 
-// ✅ Debug environment variables (remove in production)
-console.log("🔍 Environment Variables Check:");
-console.log("CLOUDINARY_CLOUD_NAME:", process.env.CLOUDINARY_CLOUD_NAME ? "✅ Set" : "❌ Missing");
-console.log("CLOUDINARY_API_KEY:", process.env.CLOUDINARY_API_KEY ? "✅ Set" : "❌ Missing");
-console.log("CLOUDINARY_API_SECRET:", process.env.CLOUDINARY_API_SECRET ? "✅ Set" : "❌ Missing");
+// ✅ COMPLETE DIAGNOSTIC - Check your credentials
+console.log("🔍 COMPLETE CREDENTIAL DIAGNOSTIC:");
+console.log("Raw CLOUDINARY_CLOUD_NAME:", JSON.stringify(process.env.CLOUDINARY_CLOUD_NAME));
+console.log("Raw CLOUDINARY_API_KEY:", JSON.stringify(process.env.CLOUDINARY_API_KEY));
+console.log("Raw CLOUDINARY_API_SECRET:", JSON.stringify(process.env.CLOUDINARY_API_SECRET));
 
-// ✅ Configure Cloudinary with string values (not variables)
+// ✅ Clean and configure Cloudinary
+const cloudName = String(process.env.CLOUDINARY_CLOUD_NAME || '').trim();
+const apiKey = String(process.env.CLOUDINARY_API_KEY || '').trim();
+const apiSecret = String(process.env.CLOUDINARY_API_SECRET || '').trim();
+
+console.log("Cleaned cloud_name:", cloudName);
+console.log("Cleaned api_key:", apiKey);
+console.log("Cleaned api_secret length:", apiSecret.length);
+
 cloudinary.config({
-  cloud_name: String(process.env.CLOUDINARY_CLOUD_NAME).trim(),
-  api_key: String(process.env.CLOUDINARY_API_KEY).trim(),
-  api_secret: String(process.env.CLOUDINARY_API_SECRET).trim(),
+  cloud_name: cloudName,
+  api_key: apiKey,
+  api_secret: apiSecret,
   secure: true
 });
-
-// Import existing utility functions
-const { 
-  generateUniqueFilename,
-  isValidImageType,
-  isValidFileSize
-} = require('./utils/uploadImage');
-
-// Configure multer for temporary storage
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    const tempDir = path.join(__dirname, "temp", "uploads");
-    if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir, { recursive: true });
-    }
-    cb(null, tempDir);
-  },
-  filename: function (req, file, cb) {
-    cb(null, generateUniqueFilename(file.originalname));
-  }
-});
-
-const upload = multer({ 
-  storage: storage,
-  limits: { 
-    fileSize: 10 * 1024 * 1024, // 10MB
-  },
-  fileFilter: (req, file, cb) => {
-    if (isValidImageType(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error('Invalid file type'), false);
-    }
-  }
-});
-
-// ✅ SIMPLIFIED Cloudinary upload function - minimal parameters to avoid signature issues
-const uploadToCloudinary = async (filePath) => {
-  try {
-    console.log("🚀 Starting Cloudinary upload...");
-    console.log("📁 File path:", filePath);
-    
-    // ✅ Use MINIMAL upload options to avoid signature generation issues
-    const result = await cloudinary.uploader.upload(filePath, {
-      // Only essential parameters - no custom transformations
-      resource_type: "auto",
-      folder: "portfolio" // Simplified folder name
-    });
-    
-    console.log("✅ Upload successful:", result.public_id);
-    
-    // Clean up temp file
-    try {
-      fs.unlinkSync(filePath);
-    } catch (e) {
-      console.warn('Could not delete temp file:', e.message);
-    }
-    
-    return {
-      success: true,
-      publicId: result.public_id,
-      url: result.secure_url,
-      width: result.width,
-      height: result.height,
-      format: result.format,
-      size: result.bytes
-    };
-    
-  } catch (error) {
-    console.error("❌ Cloudinary upload error:", error);
-    
-    // Clean up temp file on error
-    try {
-      fs.unlinkSync(filePath);
-    } catch (e) {
-      console.warn('Could not delete temp file after error:', e.message);
-    }
-    
-    return {
-      success: false,
-      error: error.message
-    };
-  }
-};
 
 // Connect to database
 connectDB();
 
 const app = express();
-
-// Middleware
 app.use(cors());
 app.use(express.json());
 
-// Create temp directory
-const createTempDir = () => {
-  const tempDir = path.join(__dirname, "temp", "uploads");
-  if (!fs.existsSync(tempDir)) {
-    fs.mkdirSync(tempDir, { recursive: true });
-    console.log("✅ Created temp upload directory");
-  }
-};
-
-createTempDir();
-
-// ✅ TEST ENDPOINT - Verify Cloudinary credentials work
-app.get('/api/cloudinary/test-credentials', async (req, res) => {
+// ✅ STEP 1: Test if your credentials are completely valid
+app.get('/api/cloudinary/full-diagnostic', async (req, res) => {
   try {
-    console.log("🧪 Testing Cloudinary credentials...");
+    console.log("🩺 Running full Cloudinary diagnostic...");
     
-    // Test with a simple 1x1 pixel image
-    const testImageData = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+    const config = cloudinary.config();
     
-    const result = await cloudinary.uploader.upload(testImageData, {
-      public_id: "test_" + Date.now(),
-      resource_type: "image"
-    });
+    // Check if all required fields are present
+    const diagnostics = {
+      configPresent: {
+        cloud_name: !!config.cloud_name,
+        api_key: !!config.api_key,
+        api_secret: !!config.api_secret
+      },
+      configValues: {
+        cloud_name: config.cloud_name,
+        api_key: config.api_key,
+        api_secret_length: config.api_secret ? config.api_secret.length : 0
+      },
+      envVarsRaw: {
+        CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME,
+        CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY,
+        CLOUDINARY_API_SECRET_LENGTH: process.env.CLOUDINARY_API_SECRET ? process.env.CLOUDINARY_API_SECRET.length : 0
+      }
+    };
     
-    // Delete the test image
-    await cloudinary.uploader.destroy(result.public_id);
+    // Test basic ping (doesn't require credentials)
+    try {
+      const pingResult = await cloudinary.api.ping();
+      diagnostics.ping = { success: true, status: pingResult.status };
+    } catch (pingError) {
+      diagnostics.ping = { success: false, error: pingError.message };
+    }
+    
+    // Test admin API call (requires valid credentials)
+    try {
+      const adminResult = await cloudinary.api.resources({ max_results: 1 });
+      diagnostics.adminApi = { success: true, resourceCount: adminResult.resources.length };
+    } catch (adminError) {
+      diagnostics.adminApi = { success: false, error: adminError.message };
+    }
     
     res.json({
       success: true,
-      message: "Cloudinary credentials are working!",
-      cloudName: cloudinary.config().cloud_name,
-      testPublicId: result.public_id
+      message: "Full diagnostic complete",
+      diagnostics
     });
     
   } catch (error) {
-    console.error("❌ Credential test failed:", error);
     res.status(500).json({
       success: false,
-      message: "Cloudinary credentials test failed",
-      error: error.message,
-      cloudName: cloudinary.config().cloud_name
+      message: "Diagnostic failed",
+      error: error.message
     });
   }
 });
 
-// ✅ SIMPLIFIED UPLOAD ROUTE
-app.post('/api/projects/upload-image', upload.single('image'), async (req, res) => {
+// ✅ STEP 2: Simple credential test with manual signature generation
+app.get('/api/cloudinary/manual-test', async (req, res) => {
   try {
-    console.log("📤 Upload request received");
+    const crypto = require('crypto');
     
-    if (!req.file) {
-      return res.status(400).json({
-        success: false,
-        message: 'No image file uploaded'
-      });
-    }
-
-    console.log("📁 File details:", {
-      filename: req.file.filename,
-      size: req.file.size,
-      mimetype: req.file.mimetype
+    // Generate timestamp
+    const timestamp = Math.round(Date.now() / 1000);
+    
+    // Create parameters to sign (alphabetical order, no file/api_key/cloud_name)
+    const paramsToSign = `timestamp=${timestamp}`;
+    
+    // Add API secret
+    const stringToSign = paramsToSign + apiSecret;
+    
+    console.log("📝 Manual signature generation:");
+    console.log("Params to sign:", paramsToSign);
+    console.log("API Secret length:", apiSecret.length);
+    console.log("String to sign:", stringToSign);
+    
+    // Generate signature
+    const signature = crypto.createHash('sha1').update(stringToSign).digest('hex');
+    
+    console.log("Generated signature:", signature);
+    
+    // Test with manual curl-like approach
+    const testData = new FormData();
+    testData.append('timestamp', timestamp.toString());
+    testData.append('api_key', apiKey);
+    testData.append('signature', signature);
+    testData.append('file', 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==');
+    
+    const response = await fetch(`https://api.cloudinary.com/v1_1/${cloudName}/image/upload`, {
+      method: 'POST',
+      body: testData
     });
-
-    // Validate file
-    if (!isValidImageType(req.file.mimetype)) {
-      fs.unlinkSync(req.file.path);
-      return res.status(400).json({
-        success: false,
-        message: 'Invalid file type'
-      });
-    }
-
-    if (!isValidFileSize(req.file.size)) {
-      fs.unlinkSync(req.file.path);
-      return res.status(400).json({
-        success: false,
-        message: 'File too large. Maximum size is 10MB'
-      });
-    }
-
-    // ✅ Use the simplified upload function
-    const uploadResult = await uploadToCloudinary(req.file.path);
-
-    if (uploadResult.success) {
-      console.log(`✅ Upload successful: ${uploadResult.publicId}`);
-      
-      res.status(200).json({
-        success: true,
-        message: 'Image uploaded successfully',
-        data: {
-          publicId: uploadResult.publicId,
-          url: uploadResult.url,
-          width: uploadResult.width,
-          height: uploadResult.height,
-          format: uploadResult.format,
-          size: uploadResult.size,
-          filename: req.file.originalname
-        }
-      });
-    } else {
-      console.error(`❌ Upload failed: ${uploadResult.error}`);
-      
-      res.status(500).json({
-        success: false,
-        message: 'Failed to upload image to Cloudinary',
-        error: uploadResult.error
-      });
-    }
-
-  } catch (error) {
-    console.error('❌ Upload route error:', error);
     
-    if (req.file && req.file.path) {
-      try {
-        fs.unlinkSync(req.file.path);
-      } catch (e) {
-        console.warn('Could not delete temp file:', e.message);
-      }
+    const result = await response.json();
+    
+    if (result.public_id) {
+      // Clean up test image
+      await cloudinary.uploader.destroy(result.public_id);
     }
-
+    
+    res.json({
+      success: !result.error,
+      message: result.error ? "Credential test failed" : "Credentials are working!",
+      timestamp,
+      signature,
+      stringToSign,
+      cloudinaryResponse: result
+    });
+    
+  } catch (error) {
     res.status(500).json({
       success: false,
-      message: 'Internal server error during upload',
+      message: "Manual test failed",
       error: error.message
+    });
+  }
+});
+
+// ✅ STEP 3: Get NEW credentials from Cloudinary (this will tell you if credentials are wrong)
+app.get('/api/cloudinary/verify-credentials', async (req, res) => {
+  try {
+    // This endpoint tests if your current credentials work at all
+    const result = await cloudinary.api.resources({ max_results: 1 });
+    
+    res.json({
+      success: true,
+      message: "✅ Your Cloudinary credentials are VALID!",
+      account: cloudName,
+      resourceCount: result.resources.length
+    });
+    
+  } catch (error) {
+    res.status(401).json({
+      success: false,
+      message: "❌ Your Cloudinary credentials are INVALID!",
+      error: error.message,
+      instructions: [
+        "1. Go to https://console.cloudinary.com/",
+        "2. Login to your account",
+        "3. Go to Settings > API Keys", 
+        "4. Copy your Cloud Name, API Key, and API Secret",
+        "5. Update your config/config.env file",
+        "6. Restart your server"
+      ]
     });
   }
 });
@@ -258,8 +200,6 @@ app.use("/api/projects", projectroute);
 app.use("/api/skills", skillroute);
 app.use("/api", adminRoute);
 
-app.use("/uploads", express.static(path.join(__dirname, "uploads")));
-
 app.get("/api/health", (req, res) => {
   res.status(200).json({
     success: true,
@@ -268,18 +208,11 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-app.use((err, req, res, next) => {
-  console.error("Global Error Handler:", err);
-  res.status(500).json({ 
-    success: false, 
-    message: "Server error"
-  });
-});
-
 const PORT = process.env.PORT || 8000;
 
 app.listen(PORT, () => {
   console.log(`🚀 Server is running on port ${PORT}`);
-  console.log(`🧪 Test credentials: GET http://localhost:${PORT}/api/cloudinary/test-credentials`);
-  console.log(`🖼️ Upload image: POST http://localhost:${PORT}/api/projects/upload-image`);
+  console.log(`🩺 Full diagnostic: GET http://localhost:${PORT}/api/cloudinary/full-diagnostic`);
+  console.log(`🔑 Verify credentials: GET http://localhost:${PORT}/api/cloudinary/verify-credentials`);
+  console.log(`🧪 Manual test: GET http://localhost:${PORT}/api/cloudinary/manual-test`);
 });
