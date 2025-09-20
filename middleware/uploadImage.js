@@ -1,20 +1,16 @@
-const cloudinary = require('cloudinary').v2;
-const fs = require('fs').promises;
 const path = require('path');
+const fs = require('fs').promises;
+const sharp = require('sharp'); // Optional: for image optimization
 
 // Configuration constants
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET,
-  secure: true
-});
+const SERVER_URL = process.env.SERVER_URL || 'http://localhost:5000';
+const UPLOAD_DIR = path.join(__dirname, '../uploads/images');
 
 // Allowed file types (added GIF support)
 const allowedTypes = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif'];
 
-// Maximum file size (10MB for Cloudinary)
-const maxSize = 10 * 1024 * 1024;
+// Maximum file size (5MB)
+const maxSize = 5 * 1024 * 1024;
 
 // Validate file type
 const isValidImageType = (mimetype) => {
@@ -42,194 +38,154 @@ const validateFiles = (files) => {
       errors.push('Invalid file type. Only JPEG, JPG, PNG, WEBP, and GIF files are allowed');
     }
     if (!isValidFileSize(file.size)) {
-      errors.push('File size too large. Maximum size is 10MB');
+      errors.push('File size too large. Maximum size is 5MB');
     }
     return errors;
   });
 };
 
-// Generate unique filename for Cloudinary public_id
+// Generate unique filename
 const generateUniqueFilename = (originalname) => {
   const timestamp = Date.now();
   const randomString = Math.random().toString(36).substring(2, 8);
   const extension = path.extname(originalname).toLowerCase();
-  const basename = path.basename(originalname, extension);
-  return `${basename}_${timestamp}_${randomString}`;
+  return `${timestamp}_${randomString}${extension}`;
 };
 
-// Upload single image to Cloudinary
-const uploadToCloudinary = async (filePath, options = {}) => {
+// Get image URL
+const getImageUrl = (filename) => {
+  return `${SERVER_URL}/uploads/images/${filename}`;
+};
+
+// Ensure upload directory exists
+const ensureUploadDir = async () => {
   try {
-    const {
-      folder = 'uploads/images',
-      transformation = [],
-      format = 'auto',
-      quality = 'auto',
-      publicId = null
-    } = options;
-
-    const uploadOptions = {
-      folder: folder,
-      resource_type: 'image',
-      format: format,
-      quality: quality,
-      transformation: [
-        { width: 1200, height: 800, crop: 'limit' },
-        { fetch_format: 'auto', quality: 'auto' },
-        ...transformation
-      ]
-    };
-
-    if (publicId) {
-      uploadOptions.public_id = publicId;
-    }
-
-    const result = await cloudinary.uploader.upload(filePath, uploadOptions);
-
-    // Clean up local file after successful upload
-    try {
-      await fs.unlink(filePath);
-    } catch (unlinkError) {
-      console.warn('Could not delete local file:', unlinkError.message);
-    }
-
-    return {
-      success: true,
-      publicId: result.public_id,
-      url: result.secure_url,
-      width: result.width,
-      height: result.height,
-      format: result.format,
-      size: result.bytes,
-      version: result.version,
-      thumbnailUrl: generateThumbnailUrl(result.public_id)
-    };
+    await fs.mkdir(UPLOAD_DIR, { recursive: true });
+    await fs.mkdir(path.join(UPLOAD_DIR, 'thumbnails'), { recursive: true });
   } catch (error) {
-    // Clean up local file on error
-    try {
-      await fs.unlink(filePath);
-    } catch (unlinkError) {
-      console.warn('Could not delete local file after error:', unlinkError.message);
-    }
-    
-    return {
-      success: false,
-      error: error.message || 'Upload failed'
-    };
+    console.error('Error creating upload directories:', error.message);
   }
 };
 
-// Upload using stream (for memory efficiency)
-const uploadStreamToCloudinary = (options = {}) => {
-  return new Promise((resolve, reject) => {
-    const {
-      folder = 'uploads/images',
-      transformation = [],
-      format = 'auto',
-      quality = 'auto',
-      publicId = null
-    } = options;
-
-    const uploadOptions = {
-      folder: folder,
-      resource_type: 'image',
-      format: format,
-      quality: quality,
-      transformation: [
-        { width: 1200, height: 800, crop: 'limit' },
-        { fetch_format: 'auto', quality: 'auto' },
-        ...transformation
-      ]
-    };
-
-    if (publicId) {
-      uploadOptions.public_id = publicId;
+// Delete image file
+const deleteImageFile = async (filename) => {
+  try {
+    if (!filename) return;
+    
+    const filePath = path.join(UPLOAD_DIR, filename);
+    const thumbnailPath = path.join(UPLOAD_DIR, 'thumbnails', filename);
+    
+    // Delete main image
+    try {
+      await fs.unlink(filePath);
+      console.log(`Deleted image file: ${filename}`);
+    } catch (e) {
+      console.warn(`Main image not found: ${filename}`);
     }
-
-    const uploadStream = cloudinary.uploader.upload_stream(
-      uploadOptions,
-      (error, result) => {
-        if (error) {
-          reject({
-            success: false,
-            error: error.message || 'Stream upload failed'
-          });
-        } else {
-          resolve({
-            success: true,
-            publicId: result.public_id,
-            url: result.secure_url,
-            width: result.width,
-            height: result.height,
-            format: result.format,
-            size: result.bytes,
-            version: result.version,
-            thumbnailUrl: generateThumbnailUrl(result.public_id)
-          });
-        }
-      }
-    );
-
-    return uploadStream;
-  });
+    
+    // Delete thumbnail if exists
+    try {
+      await fs.unlink(thumbnailPath);
+      console.log(`Deleted thumbnail: ${filename}`);
+    } catch (e) {
+      // Thumbnail may not exist, ignore
+    }
+  } catch (error) {
+    console.error(`Error deleting image ${filename}:`, error.message);
+  }
 };
 
-// Generate thumbnail URL using Cloudinary transformations
-const generateThumbnailUrl = (publicId, size = 200) => {
-  return cloudinary.url(publicId, {
-    width: size,
-    height: size,
-    crop: 'fill',
-    gravity: 'face',
-    format: 'auto',
-    quality: 'auto',
-    secure: true
-  });
+// Optimize image with format-specific handling
+const optimizeImage = async (inputPath, outputPath, options = {}) => {
+  try {
+    const {
+      width = 1200,
+      height = 800,
+      quality = 85,
+      format = 'jpeg'
+    } = options;
+
+    const image = sharp(inputPath);
+    
+    // Apply resize
+    image.resize(width, height, {
+      fit: 'inside',
+      withoutEnlargement: true
+    });
+
+    // Apply format-specific compression
+    switch (format.toLowerCase()) {
+      case 'png':
+        image.png({ compressionLevel: 9, quality });
+        break;
+      case 'webp':
+        image.webp({ quality });
+        break;
+      case 'gif':
+        // Sharp doesn't optimize GIFs well, just resize
+        image.gif();
+        break;
+      default:
+        image.jpeg({ quality, progressive: true });
+    }
+
+    await image.toFile(outputPath);
+
+    // Delete original file if different path
+    if (inputPath !== outputPath) {
+      await fs.unlink(inputPath);
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('Image optimization error:', error.message);
+    return false;
+  }
 };
 
 // Batch process multiple images
 const batchProcessImages = async (files, options = {}) => {
+  await ensureUploadDir();
+  
   const results = [];
   
   for (const file of files) {
     try {
-      if (!file || !file.path) {
+      const optimizedFilename = generateUniqueFilename(file.originalname);
+      const outputPath = path.join(UPLOAD_DIR, optimizedFilename);
+      
+      // Detect format from mimetype
+      const format = file.mimetype.split('/')[1] === 'jpeg' ? 'jpeg' : file.mimetype.split('/')[1];
+      
+      const optimized = await optimizeImage(file.path, outputPath, {
+        ...options,
+        format
+      });
+      
+      if (optimized) {
+        // Create thumbnail
+        const thumbnailPath = path.join(UPLOAD_DIR, 'thumbnails', optimizedFilename);
+        await createThumbnail(outputPath, thumbnailPath);
+        
         results.push({
-          success: false,
-          error: 'Invalid file object',
-          filename: file?.originalname || 'unknown'
+          success: true,
+          filename: optimizedFilename,
+          url: getImageUrl(optimizedFilename),
+          thumbnailUrl: `${SERVER_URL}/uploads/images/thumbnails/${optimizedFilename}`,
+          size: (await fs.stat(outputPath)).size
         });
-        continue;
-      }
-
-      // Validate file before upload
-      const errors = validateUploadedFile(file);
-      if (errors.length > 0) {
+      } else {
         results.push({
           success: false,
-          error: errors.join(', '),
+          error: 'Optimization failed',
           filename: file.originalname
         });
-        continue;
       }
-
-      // Generate unique public ID
-      const publicId = generateUniqueFilename(file.originalname);
-      
-      const uploadResult = await uploadToCloudinary(file.path, {
-        publicId,
-        ...options
-      });
-      
-      results.push({
-        ...uploadResult,
-        filename: file.originalname
-      });
     } catch (error) {
       results.push({
         success: false,
         error: error.message,
-        filename: file?.originalname || 'unknown'
+        filename: file.originalname
       });
     }
   }
@@ -237,91 +193,18 @@ const batchProcessImages = async (files, options = {}) => {
   return results;
 };
 
-// Process uploaded file from multer
-const processUploadedFile = async (file, options = {}) => {
+// Process uploaded file
+const processUploadedFile = (file) => {
   if (!file) return null;
 
-  // Validate file first
-  const errors = validateUploadedFile(file);
-  if (errors.length > 0) {
-    return {
-      success: false,
-      errors: errors,
-      filename: file.originalname
-    };
-  }
-
-  // Generate unique public ID
-  const publicId = generateUniqueFilename(file.originalname);
-  
-  // Upload to Cloudinary
-  const result = await uploadToCloudinary(file.path, {
-    publicId,
-    ...options
-  });
-
   return {
-    ...result,
-    filename: file.originalname,
+    filename: file.filename,
     originalname: file.originalname,
     mimetype: file.mimetype,
-    originalSize: file.size
+    size: file.size,
+    url: getImageUrl(file.filename),
+    path: file.path
   };
-};
-
-// Process file from buffer (useful for direct uploads)
-const processFileBuffer = async (buffer, originalname, options = {}) => {
-  return new Promise((resolve, reject) => {
-    const {
-      folder = 'uploads/images',
-      transformation = [],
-      format = 'auto',
-      quality = 'auto'
-    } = options;
-
-    const publicId = generateUniqueFilename(originalname);
-    
-    const uploadOptions = {
-      folder: folder,
-      resource_type: 'image',
-      format: format,
-      quality: quality,
-      public_id: publicId,
-      transformation: [
-        { width: 1200, height: 800, crop: 'limit' },
-        { fetch_format: 'auto', quality: 'auto' },
-        ...transformation
-      ]
-    };
-
-    const uploadStream = cloudinary.uploader.upload_stream(
-      uploadOptions,
-      (error, result) => {
-        if (error) {
-          resolve({
-            success: false,
-            error: error.message || 'Buffer upload failed',
-            filename: originalname
-          });
-        } else {
-          resolve({
-            success: true,
-            publicId: result.public_id,
-            url: result.secure_url,
-            width: result.width,
-            height: result.height,
-            format: result.format,
-            size: result.bytes,
-            version: result.version,
-            thumbnailUrl: generateThumbnailUrl(result.public_id),
-            filename: originalname
-          });
-        }
-      }
-    );
-
-    uploadStream.end(buffer);
-  });
 };
 
 // Validate uploaded file
@@ -338,128 +221,69 @@ const validateUploadedFile = (file) => {
   }
 
   if (!isValidFileSize(file.size)) {
-    errors.push('File size too large. Maximum size is 10MB');
+    errors.push('File size too large. Maximum size is 5MB');
   }
 
   return errors;
 };
 
-// Delete image from Cloudinary
-const deleteImageFromCloudinary = async (publicId) => {
+// Create thumbnail (improved error handling)
+const createThumbnail = async (inputPath, thumbnailPath, size = 200) => {
   try {
-    if (!publicId) return { success: false, error: 'No public ID provided' };
+    await fs.mkdir(path.dirname(thumbnailPath), { recursive: true });
     
-    const result = await cloudinary.uploader.destroy(publicId);
+    await sharp(inputPath)
+      .resize(size, size, {
+        fit: 'cover',
+        position: 'center'
+      })
+      .jpeg({ quality: 80 })
+      .toFile(thumbnailPath);
     
-    if (result.result === 'ok') {
-      console.log(`Successfully deleted image: ${publicId}`);
-      return { success: true, publicId };
-    } else {
-      console.warn(`Failed to delete image: ${publicId}, result: ${result.result}`);
-      return { success: false, error: `Delete failed: ${result.result}`, publicId };
-    }
+    return true;
   } catch (error) {
-    console.error(`Error deleting image ${publicId}:`, error.message);
-    return { success: false, error: error.message, publicId };
+    console.error('Thumbnail creation error:', error.message);
+    return false;
   }
 };
 
-// Batch delete multiple images
-const batchDeleteImages = async (publicIds) => {
-  const results = [];
-  
-  for (const publicId of publicIds) {
-    const result = await deleteImageFromCloudinary(publicId);
-    results.push(result);
-  }
-  
-  return results;
-};
-
-// Get image details from Cloudinary
-const getImageDetails = async (publicId) => {
+// Enhanced cleanup with better error handling
+const cleanupOldImages = async (daysOld = 30) => {
   try {
-    if (!publicId) return { success: false, error: 'No public ID provided' };
-    
-    const result = await cloudinary.api.resource(publicId);
-    
-    return {
-      success: true,
-      publicId: result.public_id,
-      url: result.secure_url,
-      width: result.width,
-      height: result.height,
-      format: result.format,
-      size: result.bytes,
-      created: result.created_at,
-      version: result.version,
-      thumbnailUrl: generateThumbnailUrl(result.public_id)
-    };
-  } catch (error) {
-    return {
-      success: false,
-      error: error.message,
-      publicId
-    };
-  }
-};
-
-// Generate different sized images
-const generateImageVariants = (publicId, variants = {}) => {
-  const defaultVariants = {
-    thumbnail: { width: 200, height: 200, crop: 'fill' },
-    small: { width: 400, height: 300, crop: 'fit' },
-    medium: { width: 800, height: 600, crop: 'fit' },
-    large: { width: 1200, height: 900, crop: 'fit' }
-  };
-  
-  const mergedVariants = { ...defaultVariants, ...variants };
-  const urls = {};
-  
-  Object.keys(mergedVariants).forEach(variant => {
-    urls[variant] = cloudinary.url(publicId, {
-      ...mergedVariants[variant],
-      format: 'auto',
-      quality: 'auto',
-      secure: true
-    });
-  });
-  
-  return urls;
-};
-
-// Clean up old images (requires Admin API)
-const cleanupOldImages = async (daysOld = 30, folder = 'uploads/images') => {
-  try {
+    const files = await fs.readdir(UPLOAD_DIR);
     const cutoffDate = new Date();
     cutoffDate.setDate(cutoffDate.getDate() - daysOld);
-    
-    // Get all images in folder
-    const results = await cloudinary.api.resources({
-      type: 'upload',
-      prefix: folder,
-      max_results: 500 // Cloudinary's max per request
-    });
-    
-    const oldImages = results.resources.filter(resource => {
-      const createdDate = new Date(resource.created_at);
-      return createdDate < cutoffDate;
-    });
-    
-    if (oldImages.length === 0) {
-      return { deletedCount: 0, errors: [] };
+
+    let deletedCount = 0;
+    const errors = [];
+
+    for (const file of files) {
+      try {
+        // Skip directories
+        if (file === 'thumbnails') continue;
+        
+        const filePath = path.join(UPLOAD_DIR, file);
+        const stats = await fs.stat(filePath);
+        
+        if (stats.isFile() && stats.mtime < cutoffDate) {
+          await fs.unlink(filePath);
+          
+          // Also try to delete corresponding thumbnail
+          try {
+            await fs.unlink(path.join(UPLOAD_DIR, 'thumbnails', file));
+          } catch (e) {
+            // Thumbnail might not exist
+          }
+          
+          deletedCount++;
+          console.log(`Deleted old image: ${file}`);
+        }
+      } catch (error) {
+        errors.push(`Failed to process ${file}: ${error.message}`);
+      }
     }
-    
-    // Delete old images in batches
-    const publicIds = oldImages.map(img => img.public_id);
-    const deleteResult = await cloudinary.api.delete_resources(publicIds);
-    
-    const deletedCount = Object.keys(deleteResult.deleted).length;
-    const errors = Object.entries(deleteResult.partial || {}).map(
-      ([id, error]) => `${id}: ${error}`
-    );
-    
-    console.log(`Cloudinary cleanup completed. Deleted ${deletedCount} old images.`);
+
+    console.log(`Image cleanup completed. Deleted ${deletedCount} old images.`);
     
     if (errors.length > 0) {
       console.warn('Cleanup errors:', errors);
@@ -467,33 +291,41 @@ const cleanupOldImages = async (daysOld = 30, folder = 'uploads/images') => {
     
     return { deletedCount, errors };
   } catch (error) {
-    console.error('Cloudinary cleanup error:', error.message);
+    console.error('Image cleanup error:', error.message);
     return { deletedCount: 0, errors: [error.message] };
   }
 };
 
+// Get file info (useful for debugging)
+const getFileInfo = async (filename) => {
+  try {
+    const filePath = path.join(UPLOAD_DIR, filename);
+    const stats = await fs.stat(filePath);
+    return {
+      exists: true,
+      size: stats.size,
+      created: stats.birthtime,
+      modified: stats.mtime,
+      url: getImageUrl(filename)
+    };
+  } catch (error) {
+    return { exists: false, error: error.message };
+  }
+};
+
 module.exports = {
-  // Validation functions
   isValidImageType,
   isValidFileSize,
   validateFiles,
-  validateUploadedFile,
-  
-  // Upload functions
-  uploadToCloudinary,
-  uploadStreamToCloudinary,
-  processUploadedFile,
-  processFileBuffer,
-  batchProcessImages,
-  
-  // Utility functions
   generateUniqueFilename,
-  generateThumbnailUrl,
-  generateImageVariants,
-  
-  // Image management
-  deleteImageFromCloudinary,
-  batchDeleteImages,
-  getImageDetails,
-  cleanupOldImages
+  getImageUrl,
+  ensureUploadDir,
+  deleteImageFile,
+  optimizeImage,
+  batchProcessImages,
+  processUploadedFile,
+  validateUploadedFile,
+  createThumbnail,
+  cleanupOldImages,
+  getFileInfo
 };
