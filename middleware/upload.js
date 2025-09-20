@@ -1,32 +1,25 @@
 const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
+const cloudinary = require('cloudinary').v2;
 
+// Cloudinary config
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET
+});
 
-const ensureUploadDir = (dir) => {
-  if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true });
-  }
-};
-
-
-const storage = multer.diskStorage({
-  destination: function (req, file, cb) {
-    const uploadDir = path.join(__dirname, '../uploads/images');
-    ensureUploadDir(uploadDir);
-    cb(null, uploadDir);
-  },
-  filename: function (req, file, cb) {
-
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    const ext = path.extname(file.originalname);
-    cb(null, file.fieldname + '-' + uniqueSuffix + ext);
+// Multer Cloudinary storage
+const storage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'portfolio_projects', // Cloudinary folder name
+    allowed_formats: ['jpg', 'png', 'jpeg', 'webp']
   }
 });
 
-
+// File filter for images only
 const fileFilter = (req, file, cb) => {
-  
   if (file.mimetype.startsWith('image/')) {
     cb(null, true);
   } else {
@@ -34,7 +27,7 @@ const fileFilter = (req, file, cb) => {
   }
 };
 
-
+// Multer setup
 const upload = multer({
   storage: storage,
   fileFilter: fileFilter,
@@ -43,7 +36,7 @@ const upload = multer({
   }
 });
 
-
+// Error handler
 const handleUploadError = (error, req, res, next) => {
   if (error instanceof multer.MulterError) {
     if (error.code === 'LIMIT_FILE_SIZE') {
@@ -71,21 +64,21 @@ const handleUploadError = (error, req, res, next) => {
   next();
 };
 
-
+// Upload middlewares
 const uploadSingle = upload.single('image');
-
 const uploadMultiple = upload.array('images', 5);
 
-
-const getFileUrl = (filename) => {
-  return `${process.env.SERVER_URL || 'http://localhost:5000'}/uploads/images/${filename}`;
+// Function to get file URL (Cloudinary already gives public URL)
+const getFileUrl = (file) => {
+  return file.path; // Cloudinary public URL
 };
 
-
-const deleteFile = (filename) => {
-  const filePath = path.join(__dirname, '../uploads/images', filename);
-  if (fs.existsSync(filePath)) {
-    fs.unlinkSync(filePath);
+// Delete file from Cloudinary
+const deleteFile = async (publicId) => {
+  try {
+    await cloudinary.uploader.destroy(publicId);
+  } catch (err) {
+    console.error('Error deleting file from Cloudinary:', err);
   }
 };
 
