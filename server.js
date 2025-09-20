@@ -38,7 +38,7 @@ const app = express();
 
 // Middleware
 app.use(cors({
-  origin: ["http://localhost:3000", "https://yourapp.render.com"], // Add your Render URL
+  origin: ["http://localhost:3000", "https://new-portfolio-frontend-jp0y.onrender.com"], // Add your Render URL
   credentials: true
 }));
 app.use(express.json({ limit: '10mb' }));
